@@ -1,11 +1,12 @@
 from flax import linen as nn
 from jax import numpy as jnp
 
-class AgentNet(nn.Module):
-    """A simple neural network outputing policy and value based on the current state and legal actions"""
+
+class DenseNet(nn.Module):
+    """A simple neural network outputting policy and value based on the current state and legal actions"""
     
     @nn.compact
-    def __call__(self, x, legal_actions):
+    def __call__(self, x, legal_actions, train: bool = True):
         batch_dims = x.shape[:-3] # everything except the last 3 dims (3, 3, 2)
         x = x.reshape((*batch_dims, -1))
         x = nn.Dense(128)(x) # FC 18 -> 128
@@ -19,7 +20,7 @@ class AgentNet(nn.Module):
         
         logits = nn.Dense(9)(x) # FC 64 -> 9 (policy)
         
-        # Set the logits of illegal moves to a large negative number
+        # Mask out logits of illegal moves so the agent isn't allowed to pick them
         masked_logits = jnp.where(legal_actions, logits, -1e9)
         
         return masked_logits, value

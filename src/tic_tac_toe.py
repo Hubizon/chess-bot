@@ -1,14 +1,17 @@
-import jax
-import pgx
-import jax.numpy as jnp
 import tkinter as tk
 
-from mcts import run_mcts
+import jax
+import jax.numpy as jnp
+import pgx
+
+from .mcts import run_mcts
+
 
 class TicTacToeGUI:
-    def __init__(self, network, params, player_x=True, num_simulations=32):
+    def __init__(self, network, params, batch_stats, player_x=True, num_simulations=32):
         self.network = network
         self.params = params
+        self.batch_stats = batch_stats
         self.board = [0] * 9  # 0 for empty, 1 for X, -1 for O
         self.player_x = player_x
         self.num_simulations = num_simulations
@@ -59,9 +62,10 @@ class TicTacToeGUI:
         batched_state = jax.tree_util.tree_map(lambda x: jnp.expand_dims(x, 0), self.state)
         if self.num_simulations == -1:
             masked_logits, value = self.network.apply(
-                { 'params': self.params },
+                { 'params': self.params, 'batch_stats': self.batch_stats },
                 batched_state.observation,
-                batched_state.legal_action_mask
+                batched_state.legal_action_mask,
+                train=False
             )
             action = jnp.argmax(masked_logits[0])
             weights_str = "[" + ", ".join(f"{float(x):.4f}" if x != -1e9 else "illegal" for x in masked_logits[0]) + "]"
@@ -69,7 +73,7 @@ class TicTacToeGUI:
             print(f"value: {float(value[0]):.4f}")
             self._make_move(int(action), not self.player_x)
         else:
-            policy_output = run_mcts(mcts_rng, self.params, batched_state, self.network, self.env.step, 
+            policy_output = run_mcts(mcts_rng, self.params, self.batch_stats, batched_state, self.network, self.env.step, 
                                     num_simulations=self.num_simulations, temperature=0.0, dirichlet_fraction=0.0)
             weights_str = "[" + ", ".join(f"{float(x):.4f}" for x in policy_output.action_weights[0]) + "]"
             print(f"action weights: {weights_str}")

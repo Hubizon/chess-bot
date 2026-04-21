@@ -1,11 +1,13 @@
 import functools
-import mctx
+
 import jax
+import mctx
 from jax import numpy as jnp
 
+
 @functools.partial(jax.jit, static_argnames=("network", "env_step", "num_simulations", "dirichlet_fraction", "dirichlet_alpha"))
-def run_mcts(rng_key, params, env_state, network, env_step, 
-             num_simulations=32, temperature=1.0, dirichlet_fraction=0.25, dirichlet_alpha=0.3):
+def run_mcts(rng_key, params, batch_stats, env_state, network, env_step, 
+             num_simulations, temperature=1.0, dirichlet_fraction=0.25, dirichlet_alpha=0.3):
     """
     Runs the Monte Carlo Tree Search (MCTS) algorithm to select the best action for the
     current state of the environment. It is called at each step of the game to determine the next move.
@@ -16,7 +18,7 @@ def run_mcts(rng_key, params, env_state, network, env_step,
     - params: the parameters of the neural network used to evaluate the states and actions in the MCTS
     - env_state: the current state of the environment (batched), which includes the board state, legal actions, etc.
     - network: the neural network used to evaluate the states and actions in the MCTS
-    - env_step: a function that takes the current state and an action, and returns the next state of the environment aftter the action
+    - env_step: a function that takes the current state and an action, and returns the next state of the environment after the action
     - num_simulations: the number of simulations to run in the MCTS (the passes through the tree starting from the root)
     - temperature: the temperature for the softmax used in the final action selection (should be 0 during evaluation as argmax)
     - dirichlet_fraction: P_final = (1 - dirichlet_fraction) * P_network + dirichlet_fraction * Dirichlet_noise
@@ -32,14 +34,13 @@ def run_mcts(rng_key, params, env_state, network, env_step,
         A function used in mctx to evaluate the current state before expanding the tree.
         mctx.RootFnOutput is a simple dataclass that contains:
         - policy logits of the state (so that it knows where to move next); shape: [B, 3 * 3] (the number of actions)
-        - the value of the state (the initial quality or score of the state); shape: [B, 1] (the value of the state)
+        - the value of the state (the initial quality of the state); shape: [B, 1] (the value of the state)
         state is the state of the environment (from pgx) and it contains among other things:
         - observation: the current state of the board; shape: [B, 3, 3, 2] 
         - legal_action_mask: a mask of legal actions (1 for legal, 0 for illegal); shape: [B, 3 * 3]
         """
-        # Calculate the logits and value using the network based on the current state and legal actions
         logits, value = network.apply(
-            {'params': params}, state.observation, state.legal_action_mask
+            {'params': params, 'batch_stats': batch_stats}, state.observation, state.legal_action_mask, train=False
         )
 
         return mctx.RootFnOutput(
@@ -56,16 +57,16 @@ def run_mcts(rng_key, params, env_state, network, env_step,
         while for terminal states, the reward is the final reward of the game and the discount is 0 (to ignore the predicted value of the terminal state).
         mctx.RecurrentFnOutput is a simple dataclass that contains:
         - reward: the reward received after taking the action, from the perspective of the player who just took the action; shape: [B]
-        # discount: the discount to apply to the value of the next state (since this is a finite game, it's 1 for non-terminal states)
+        - discount: the discount to apply to the value of the next state (since this is a finite game, it's 1 for non-terminal states)
         - prior_logits: the policy logits of the next state (so that it knows where to move next in future simulations); shape: [B, num_actions]
         - value: the value of the next state (the expected score of the next state from the perspective of the player who just took the action); shape: [B]
         next_state: the next state of the environment after taking the action; shape: [B, ...]
         """
         # Calculate the next state of the environment after taking the action
         next_state = jax.vmap(env_step)(state, action) # shape: [B]
-        # Calculate the logits and value of the next state using the network based on the next state and legal actions
+        
         logits, value = network.apply(
-            {'params': params}, next_state.observation, next_state.legal_action_mask
+            {'params': params, 'batch_stats': batch_stats}, next_state.observation, next_state.legal_action_mask, train=False
         )
         
         # The reward is from the perspective of the player who just took the action, and is needed to calculate the Q value of this state-action pair.
@@ -101,10 +102,10 @@ def run_mcts(rng_key, params, env_state, network, env_step,
     1. Selection: Starting from the current state, it travels down the tree by selecting actions according to the PUCT formula 
        until it reaches a leaf node (a node that hasn't been expanded yet).
     2. Expansion & Evaluation: If we are in state `s` and about to take an action `a` that leads to a leaf node, we call recurrent_fn(s, a)
-       to calculate the potential reward received after taking the action
-       After that the new state is considered expanded and its children are added to the tree as new leaf nodes.
-    If the leaf node is not a terminal state, it expands the node by calling the recurrent_fn to calculate
-                  the policy logits and value of the new state, and adds the new node to the tree.
+       to calculate the potential reward received after taking the action.
+       After that, the new state is considered expanded and its children are added to the tree as new leaf nodes.
+       If the leaf node is not a terminal state, it expands the node by calling the recurrent_fn to calculate
+       the policy logits and value of the new state, and adds the new node to the tree.
     3. Backpropagation: After the expansion and evaluation step, we don't go further down the tree, but backpropagate the
        reward received up the tree. If our trajectory in the tree was s_0 -> a_0 -> s_1 -> a_1 -> ... -> s_n
        then G_n = Value(s_n) and G_i = Reward(s_i, a_i) + discount * G_{i+1}. Additionally, we update the tree statistics:

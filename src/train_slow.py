@@ -1,14 +1,15 @@
 import random
+
+import jax
+import optax
+import pgx
+from jax import numpy as jnp
 from tqdm import tqdm
 
-import pgx
-import optax
-import jax
-from jax import numpy as jnp
-
+from densenet import DenseNet
 from mcts import run_mcts
-from network import AgentNet
 from train import train_step
+
 
 def assign_rewards_slow(game_history, player_0_reward):
     """Assigns rewards to each state in the game history from the perspective of the current player."""
@@ -28,12 +29,15 @@ def train_slow(max_iters=1, self_plays_per_generation=4, batch_size=2):
        For each game, it makes moves using run_mcts until the game is terminated and then assigns rewards 
        to each state in the game history based on the winner of the game.
     2. Training: Trains the network on the generated training data.
+    A slow version of the training loop used for initial testing and debugging.
     """
     rng = jax.random.PRNGKey(42)
     
     # Initialize the network and optimizer
-    network = AgentNet()
-    params = network.init(rng, jnp.zeros((3, 3, 2)), jnp.ones(9))['params']
+    network = DenseNet()
+    variables = network.init(rng, jnp.zeros((3, 3, 2)), jnp.ones(9))
+    params = variables['params']
+    batch_stats = variables.get('batch_stats', {})
     optimizer = optax.adam(learning_rate=1e-3)
     opt_state = optimizer.init(params)
     
@@ -76,9 +80,9 @@ def train_slow(max_iters=1, self_plays_per_generation=4, batch_size=2):
                 'actual_rewards': jnp.array([b[2] for b in batch])
             }
             
-            params, opt_state, loss = train_step(network, optimizer, params, opt_state, batch_data)
+            params, batch_stats, opt_state, loss = train_step(network, optimizer, params, batch_stats, opt_state, batch_data)
             total_loss += loss
             
         print(f"Generation {generation}, Loss: {total_loss / len(batches)}")
         
-    return params
+    return params, batch_stats

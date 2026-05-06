@@ -24,3 +24,17 @@ class ReplayBuffer:
 
         self.position = (self.position + num_samples) % self.capacity
         self.size = min(self.size + num_samples, self.capacity) 
+
+    def state_dict(self):
+        return {
+            'capacity': self.capacity,
+            'buffer': self.buffer,
+            'position': self.position,
+            'size': self.size
+        }
+        
+    def load_state_dict(self, state_dict):
+        self.capacity = state_dict['capacity']
+        self.buffer = state_dict['buffer']
+        self.position = state_dict['position']
+        self.size = state_dict['size']

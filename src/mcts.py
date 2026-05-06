@@ -5,9 +5,8 @@ import mctx
 from jax import numpy as jnp
 
 
-@functools.partial(jax.jit, static_argnames=("network", "env_step", "num_simulations", "dirichlet_fraction", "dirichlet_alpha"))
-def run_mcts(rng_key, params, batch_stats, env_state, network, env_step, 
-             num_simulations, temperature=1.0, dirichlet_fraction=0.25, dirichlet_alpha=0.3):
+@functools.partial(jax.jit, static_argnames=("network", "env_step", "num_simulations", "gumbel_scale", "max_num_considered_actions"))
+def run_mcts(rng_key, params, batch_stats, env_state, network, env_step, num_simulations, max_num_considered_actions=16, gumbel_scale=1.0):
     """
     Runs the Monte Carlo Tree Search (MCTS) algorithm to select the best action for the
     current state of the environment. It is called at each step of the game to determine the next move.
@@ -20,9 +19,8 @@ def run_mcts(rng_key, params, batch_stats, env_state, network, env_step,
     - network: the neural network used to evaluate the states and actions in the MCTS
     - env_step: a function that takes the current state and an action, and returns the next state of the environment after the action
     - num_simulations: the number of simulations to run in the MCTS (the passes through the tree starting from the root)
-    - temperature: the temperature for the softmax used in the final action selection (should be 0 during evaluation as argmax)
-    - dirichlet_fraction: P_final = (1 - dirichlet_fraction) * P_network + dirichlet_fraction * Dirichlet_noise
-    - dirichlet_alpha: the alpha parameter for the Dirichlet distribution used to add noise to the root node
+    - max_num_considered_actions: the maximum number of actions to consider during the tree search
+    - gumbel_scale: calibrates the Gumbel noise added to the policy logits for exploration
     Returns:
     - PolicyOutput dataclass which contains:
       action: the chosen action to take; shape: [B]
@@ -87,19 +85,15 @@ def run_mcts(rng_key, params, batch_stats, env_state, network, env_step,
         ), next_state
     
     # We create the root of the tree, which evaluates the current state of the environment
-    # Note: the muzero_policy adds dirichlet noise to the root node (and only the root node) to encourage exploration.
     root = root_fn(params, env_state)
     
     """
     For each move, we create a new tree and run num_simulations simulations to calculate the best action to take.
     The initial tree is built using the root, which contains the initial state and its logits and value. 
-    The logits are used to calculate the policy at the root, which is used to select the next action (P_network).
-    Additionally, solely for the root, we add Dirichlet Noise to the policy to encourage exploration from the root:
-    P_final = (1 - dirichlet_fraction) * P_network + dirichlet_fraction * Dirichlet_noise
-    The value isn't that important since it's only used to calculate the Q value of the root, which isn't used for action selection. 
+    The logits are used to calculate the policy at the root, which is used to select the next action.
     
     For each simulation, Monte Carlo Tree Search performs the following steps:
-    1. Selection: Starting from the current state, it travels down the tree by selecting actions according to the PUCT formula 
+    1. Selection: Starting from the current state, it travels down the tree by selecting actions
        until it reaches a leaf node (a node that hasn't been expanded yet).
     2. Expansion & Evaluation: If we are in state `s` and about to take an action `a` that leads to a leaf node, we call recurrent_fn(s, a)
        to calculate the potential reward received after taking the action.
@@ -108,29 +102,33 @@ def run_mcts(rng_key, params, batch_stats, env_state, network, env_step,
        the policy logits and value of the new state, and adds the new node to the tree.
     3. Backpropagation: After the expansion and evaluation step, we don't go further down the tree, but backpropagate the
        reward received up the tree. If our trajectory in the tree was s_0 -> a_0 -> s_1 -> a_1 -> ... -> s_n
-       then G_n = Value(s_n) and G_i = Reward(s_i, a_i) + discount * G_{i+1}. Additionally, we update the tree statistics:
-       N(s_i, a_i) += 1 and W(s_i, a_i) += G_i and Q(s_i, a_i) = W(s_i, a_i) / N(s_i, a_i)
-       Note: Reward(s_i, a_i) is always 0 except for the last step, when s_i -> a_i -> a terminal state
-       
-    MCTX's muzero_policy uses PUCT formula to select actions during the tree search:
+       then G_n = Value(s_n) and G_i = Reward(s_i, a_i) + discount * G_{i+1}. Additionally, we update the tree statistics.
+    
+    AlphaZero Policy uses PUCT formula to select actions during the tree search:
      PUCT(s, a) = Q(s, a) + c_puct * P(s, a) * sqrt(N(s)) / (1 + N(s, a))
      where Q(s, a) is the value of the state-action pair (calculated as the average of the rewards received in the simulations that went through this state-action pair),
      P(s, a) is the prior probability of taking action a in state s (given by the neural network),
      N(s) is the number of times the state s has been visited in the simulations,
      N(s, a) is the number of times the action a has been taken from state s in the simulations,
      c_puct is a hyperparameter that controls the level of exploration (higher c_puct encourages more exploration).
+    At each stage it selects the action that maximizes the PUCT formula, which balances between exploration and exploitation.
+    Additionally, it adds Dirichlet noise to the policy logits at the root of the tree to encourage exploration in the early stage.
+    
+    The Gumbel MuZero variant of MCTS that we use samples an initial set of `max_num_considered_actions` based on the policy logits 
+     at the root (using the Gumbel-Top-k trick, which is mathematically equivalent to sampling from a softmax distribution without replacement). 
+     It explores strictly this subset of actions during the tree search for some simulations, and then utilizes Sequential Halving, 
+     repeatedly cutting the number of considered actions in half by discarding those with the worst simulation performance,
+     and continues the search until only 1 action remains, which is then selected as the final move.
     """
-    policy_output = mctx.muzero_policy(
+    policy_output = mctx.gumbel_muzero_policy(
         params=params,
         rng_key=rng_key,
         root=root,
         recurrent_fn=recurrent_fn,
         num_simulations=num_simulations,
-        temperature=temperature,
-        dirichlet_fraction=dirichlet_fraction,
-        dirichlet_alpha=dirichlet_alpha,
+        gumbel_scale=gumbel_scale,
+        max_num_considered_actions=max_num_considered_actions,
         invalid_actions=~env_state.legal_action_mask,
-        qtransform=mctx.qtransform_by_parent_and_siblings
     )
     
     return policy_output

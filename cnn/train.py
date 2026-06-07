@@ -1,0 +1,147 @@
+import torch
+from cnn import ChessCNN, ChessDataset
+from datetime import datetime
+from torch.utils.data import DataLoader
+import chess
+import chess.pgn
+import numpy as np
+
+# Transforms a board state into a datapoint.
+def board_to_datapoint(board):
+    datapoint = np.zeros((12, 8, 8), dtype=np.float32)
+    piece_map = board.piece_map()
+    
+    for square, piece in piece_map.items():
+        file = chess.square_file(square) # a-h -> 0-7
+        rank = chess.square_rank(square) # 1-8 -> 0-7
+        piece_type = piece.piece_type - 1 # 1-6 to 0-5 (6-11)
+        datapoint[piece_type if (piece.color == chess.WHITE) else (piece_type+6), file, rank] = 1.0
+
+    return datapoint
+
+def file_to_data(filename):
+    pgn_file = open(filename)
+    X_data = []
+    y_data = []
+
+    while True:
+        game = chess.pgn.read_game(pgn_file)
+        if game is None:
+            break
+
+        result = game.headers.get("Result")
+
+        winner_color = chess.WHITE if (result == "1-0") else chess.BLACK
+
+        board = game.board()
+
+        for move in game.mainline_moves():
+            if board.turn == winner_color:
+                if winner_color == chess.WHITE:
+                    board_perspective = board
+                    from_square = move.from_square
+                    to_square = move.to_square
+                else:
+                    board_perspective = board.mirror() # Board is mirrored when predicting black's moves.
+                    # print(f"Original square: {chess.square_name(move.from_square)} Mirrored: {chess.square_name(chess.square_mirror(move.from_square))}")
+                    from_square = chess.square_mirror(move.from_square)
+                    to_square = chess.square_mirror(move.to_square)
+                X_data.append(board_to_datapoint(board_perspective))
+                y_data.append((from_square, to_square))
+            board.push(move)
+
+    X_data = np.array(X_data)
+    y_data = np.array(y_data)
+    print(f"Input from {filename} completed.")
+    return X_data, y_data
+
+def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, progcheck=64):
+    running_loss = 0.
+    last_loss = 0.
+
+    for i, data in enumerate(data_loader):
+        boards, target_from, target_to = data
+
+        optimizer.zero_grad()
+
+        predicted_from, predicted_to = model(boards)
+
+        loss_from = loss_fn(predicted_from, target_from)
+        loss_to = loss_fn(predicted_to, target_to)
+        loss = loss_from + loss_to
+
+        loss.backward()
+
+        optimizer.step()
+
+        running_loss += loss.item()
+        if i % progcheck == progcheck-1:
+            last_loss = running_loss / progcheck
+            print(f'Batch {i // progcheck + 1} loss: {last_loss}')
+            running_loss = 0.
+
+    print(f"Epoch {epoch_index} completed.")
+    return last_loss
+
+def train(epochs=25, batchsize=64, progcheck=64):
+
+    print("Starting training loop.")
+
+    model = ChessCNN()
+    loss_fn = torch.nn.CrossEntropyLoss()
+
+    train_X, train_y = file_to_data("train_games.pgn")
+    valid_X, valid_y = file_to_data("valid_games.pgn")
+    train_dataset = ChessDataset(train_X, train_y)
+    valid_dataset = ChessDataset(valid_X, valid_y)
+    train_data_loader = DataLoader(train_dataset, batch_size=batchsize, shuffle=True, drop_last=True)
+    valid_data_loader = DataLoader(valid_dataset, batch_size=batchsize, shuffle=True, drop_last=True)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    best_vloss = 1_000_000
+
+    for epoch in range(epochs):
+        print(f"Starting epoch: {epoch}")
+        model.train(True)
+        avg_loss = train_one_epoch(model, train_data_loader, optimizer, loss_fn, epoch, progcheck)
+
+        running_vloss = 0.0
+        model.eval()
+
+        with torch.no_grad():
+            for i, vdata in enumerate(valid_data_loader):
+                vinputs, v_from, v_to = vdata
+                vprediction_from, vprediction_to = model(vinputs)
+                vloss_from = loss_fn(vprediction_from, v_from)
+                vloss_to = loss_fn(vprediction_to, v_to)
+                running_vloss += (vloss_from + vloss_to)
+
+            avg_vloss = running_vloss / (i+1)
+            print(f'LOSS train {avg_loss} valid {avg_vloss}')
+
+        if avg_vloss < best_vloss:
+            best_vloss = avg_vloss
+            model_path = f'model_{timestamp}_{epoch}.model'
+            save_training_checkpoint(epoch, model, optimizer, batchsize, progcheck)
+            torch.save(model.state_dict(), model_path)
+
+def save_training_checkpoint(epoch, model, optimizer, batchsize, progcheck):
+    checkpoint_data = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'batch_size': batchsize,
+        'progress_check': progcheck
+    }
+    torch.save(checkpoint_data, "training_checkpoint_epoch"+str(epoch)+".tar")
+
+def load_training_checkpoint(epoch, model, optimizer):
+    checkpoint_data = torch.load("chess_checkpoint_epoch"+str(epoch)+".tar")
+    model.load_state_dict(checkpoint_data['model_state_dict'])
+    optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
+    return checkpoint_data['epoch'], checkpoint_data['batch_size'], checkpoint_data['progress_check']
+
+if __name__ == "__main__":
+    train()

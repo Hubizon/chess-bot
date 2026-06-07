@@ -2,3 +2,9 @@
 
 *.pyc
 *.npy
+
+cnn/training_checkpoint_epoch*
+cnn/train_games*
+cnn/valid_games*
+cnn/filtered_games*
+cnn/model_*.model

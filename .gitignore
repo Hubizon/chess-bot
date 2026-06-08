@@ -1,4 +1,6 @@
 .venv/
+.idea/
+.vscode/
 
 *.pyc
 *.npy
@@ -8,3 +10,9 @@ cnn/train_games*
 cnn/valid_games*
 cnn/filtered_games*
 cnn/model_*.model
+
+*/dist
+*/build
+run_adapter
+*.spec
+*.pgn

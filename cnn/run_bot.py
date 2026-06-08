@@ -2,6 +2,7 @@ import torch
 import chess
 import numpy as np
 import sys
+import argparse
 from cnn import ChessCNN
 
 def board_to_datapoint(board):
@@ -90,10 +91,13 @@ def run_bot(model_path):
                         continue
 
         if uci_command == "go":
-            print(get_best_move(model, board))
+            print(f"bestmove {get_best_move(model, board)}")
             sys.stdout.flush()
         if uci_command == "quit":
             break
 
 if __name__ == "__main__":
-    run_bot("model_20260607_223010_22.model") # Modify the model path
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", type=str, required=True)
+    args = parser.parse_args()
+    run_bot(args.model)

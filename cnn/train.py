@@ -104,6 +104,13 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64):
     best_vloss = 1_000_000
 
     for epoch in range(epochs):
+
+        all_guesses = 0
+        correct_guesses = 0
+        correct_piece_match = 0
+        piece_correct_guesses = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0}
+        piece_all_guesses = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0}
+
         print(f"Starting epoch: {epoch}")
         model.train(True)
         avg_loss = train_one_epoch(model, train_data_loader, optimizer, loss_fn, epoch, progcheck)
@@ -119,8 +126,31 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64):
                 vloss_to = loss_fn(vprediction_to, v_to)
                 running_vloss += (vloss_from + vloss_to)
 
+                for id in range(batchsize):
+                    all_guesses += 1
+                    curr_pred_from = int(torch.argmax(vprediction_from[id]))
+                    curr_pred_to = int(torch.argmax(vprediction_to[id]))
+                    curr_actual_from = int(v_from[id])
+                    curr_actual_to = int(v_to[id])
+
+                    piece_type = None
+                    for pc in range(6):
+                        if vinputs[id][pc][chess.square_file(curr_actual_from)][chess.square_rank(curr_actual_from)] != 0:
+                            piece_type = pc+1
+
+                    piece_all_guesses[piece_type] += 1
+                    if vinputs[id][piece_type-1][chess.square_file(curr_pred_from)][chess.square_rank(curr_pred_from)] != 0:
+                        correct_piece_match += 1
+                        
+                    if(curr_actual_from == curr_pred_from and curr_actual_to == curr_pred_to):
+                        correct_guesses += 1
+                        piece_correct_guesses[piece_type] += 1
+
             avg_vloss = running_vloss / (i+1)
-            print(f'LOSS train {avg_loss} valid {avg_vloss}')
+            print(f'LOSS train {avg_loss} valid {avg_vloss} correctness {correct_guesses}/{all_guesses} ({100*correct_guesses/all_guesses}%)')
+            print(f'Piece type matched {correct_piece_match}/{all_guesses} ({100*correct_piece_match/all_guesses}%)')
+            for pc in range(1,7):
+                print(f'{chess.piece_name(pc)} correct {piece_correct_guesses[pc]}/{piece_all_guesses[pc]} ({100*piece_correct_guesses[pc]/piece_all_guesses[pc]}%)')
 
         if avg_vloss < best_vloss:
             best_vloss = avg_vloss
@@ -146,7 +176,6 @@ def load_training_checkpoint(epoch, model, optimizer):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    train_file, valid_file, epochs=25, batchsize=64, progcheck=64
     parser.add_argument("--train", type=str, default="../data/parsed/train.pgn")
     parser.add_argument("--valid", type=str, default="../data/parsed/valid.pgn")
     parser.add_argument("--epochs", type=int, default=25)

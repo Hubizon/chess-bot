@@ -150,8 +150,8 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64):
             avg_vloss = running_vloss / (i+1)
             print('-'*20)
             print(f'Epoch: {epoch}')
-            print(f'\tTraining: {avg_loss}')
-            print(f'\tValidation loss: {avg_vloss}')
+            print(f'\tTraining loss: {avg_loss:.6f}')
+            print(f'\tValidation loss: {avg_vloss:.6f}')
             print(f'\tAccuracy: {correct_guesses}/{all_guesses} {100*correct_guesses/all_guesses:.3f}%')
             print(f'\tPiece type matched: {correct_piece_match}/{all_guesses} {100*correct_piece_match/all_guesses:.3f}%')
             for pc in range(1,7):

@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 import chess
 import chess.pgn
 import numpy as np
+import argparse
 
 # Transforms a board state into a datapoint.
 def board_to_datapoint(board):
@@ -83,15 +84,15 @@ def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, progche
     print(f"Epoch {epoch_index} completed.")
     return last_loss
 
-def train(epochs=25, batchsize=64, progcheck=64):
+def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64):
 
     print("Starting training loop.")
 
     model = ChessCNN()
     loss_fn = torch.nn.CrossEntropyLoss()
 
-    train_X, train_y = file_to_data("train_games.pgn")
-    valid_X, valid_y = file_to_data("valid_games.pgn")
+    train_X, train_y = file_to_data(train_file)
+    valid_X, valid_y = file_to_data(valid_file)
     train_dataset = ChessDataset(train_X, train_y)
     valid_dataset = ChessDataset(valid_X, valid_y)
     train_data_loader = DataLoader(train_dataset, batch_size=batchsize, shuffle=True, drop_last=True)
@@ -144,4 +145,12 @@ def load_training_checkpoint(epoch, model, optimizer):
     return checkpoint_data['epoch'], checkpoint_data['batch_size'], checkpoint_data['progress_check']
 
 if __name__ == "__main__":
-    train()
+    parser = argparse.ArgumentParser()
+    train_file, valid_file, epochs=25, batchsize=64, progcheck=64
+    parser.add_argument("--train", type=str, default="../data/parsed/train.pgn")
+    parser.add_argument("--valid", type=str, default="../data/parsed/valid.pgn")
+    parser.add_argument("--epochs", type=int, default=25)
+    parser.add_argument("--batchsize", type=int, default=64)
+    parser.add_argument("--progcheck", type=int, default=64)
+    args = parser.parse_args()
+    train(args.train, args.valid, args.epochs, args.batchsize, args.progcheck)

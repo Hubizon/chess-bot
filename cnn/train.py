@@ -78,15 +78,13 @@ def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, progche
         running_loss += loss.item()
         if i % progcheck == progcheck-1:
             last_loss = running_loss / progcheck
-            print(f'Batch {i // progcheck + 1} loss: {last_loss}')
+            #print(f'Batch {i // progcheck + 1} loss: {last_loss}')
             running_loss = 0.
 
     print(f"Epoch {epoch_index} completed.")
     return last_loss
 
 def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64):
-
-    print("Starting training loop.")
 
     model = ChessCNN()
     loss_fn = torch.nn.CrossEntropyLoss()
@@ -102,6 +100,9 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64):
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     best_vloss = 1_000_000
+
+    print("Starting training loop.")
+    print('-'*20)
 
     for epoch in range(epochs):
 
@@ -147,10 +148,15 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64):
                         piece_correct_guesses[piece_type] += 1
 
             avg_vloss = running_vloss / (i+1)
-            print(f'LOSS train {avg_loss} valid {avg_vloss} correctness {correct_guesses}/{all_guesses} ({100*correct_guesses/all_guesses}%)')
-            print(f'Piece type matched {correct_piece_match}/{all_guesses} ({100*correct_piece_match/all_guesses}%)')
+            print('-'*20)
+            print(f'Epoch: {epoch}')
+            print(f'\tTraining: {avg_loss}')
+            print(f'\tValidation loss: {avg_vloss}')
+            print(f'\tAccuracy: {correct_guesses}/{all_guesses} {100*correct_guesses/all_guesses:.3f}%')
+            print(f'\tPiece type matched: {correct_piece_match}/{all_guesses} {100*correct_piece_match/all_guesses:.3f}%')
             for pc in range(1,7):
-                print(f'{chess.piece_name(pc)} correct {piece_correct_guesses[pc]}/{piece_all_guesses[pc]} ({100*piece_correct_guesses[pc]/piece_all_guesses[pc]}%)')
+                print(f'\t{chess.piece_name(pc)} move accuracy: {piece_correct_guesses[pc]}/{piece_all_guesses[pc]} {100*piece_correct_guesses[pc]/piece_all_guesses[pc]:.3f}%')
+            print('-'*20)
 
         if avg_vloss < best_vloss:
             best_vloss = avg_vloss

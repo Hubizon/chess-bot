@@ -170,10 +170,10 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64, extende
                 for id in range(batchsize):
                     all_guesses += 1
                     if extended:
-                        curr_pred_from = vprediction_move[id]//64
-                        curr_pred_to = vprediction_move[id]%64
-                        curr_actual_from = v_move[id]//64
-                        curr_actual_to = v_move[id]%64
+                        curr_pred_from = int(vprediction_move[id]//64)
+                        curr_pred_to = int(vprediction_move[id]%64)
+                        curr_actual_from = int(v_move[id]//64)
+                        curr_actual_to = int(v_move[id]%64)
                     else:
                         curr_pred_from = int(torch.argmax(vprediction_from[id]))
                         curr_pred_to = int(torch.argmax(vprediction_to[id]))

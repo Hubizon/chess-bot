@@ -78,7 +78,7 @@ def file_to_data(filename, extended, max_games=None, progress_check=5000):
     else:
         return X_data, y_data
 
-def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, device, prog_check=10000, extended=False):
+def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, device, prog_check=10000, extended=False, scheduler=None):
     running_loss = 0.
     last_loss = 0.
 
@@ -111,6 +111,8 @@ def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, device,
         loss.backward()
 
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
 
         running_loss += loss.item()
         if i % prog_check == prog_check-1:
@@ -121,7 +123,7 @@ def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, device,
     print(f"Epoch {epoch_index} completed.")
     return last_loss
 
-def train(train_file, valid_file, epochs=25, batch_size=64, prog_check=10000, extended=False, resnet=False, max_games=None):
+def train(train_file, valid_file, epochs=10, batch_size=64, prog_check=10000, extended=False, resnet=False, max_games=None):
     if resnet:
         extended = True
 
@@ -138,6 +140,7 @@ def train(train_file, valid_file, epochs=25, batch_size=64, prog_check=10000, ex
         model = ExtendedChessCNN()
     else:
         model = ChessCNN()
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters()):,}")
     model = model.to(device)
     loss_fn = torch.nn.CrossEntropyLoss()
 
@@ -160,7 +163,8 @@ def train(train_file, valid_file, epochs=25, batch_size=64, prog_check=10000, ex
     valid_data_loader = DataLoader(valid_dataset, batch_size=batch_size, pin_memory=True, num_workers=2)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001) if resnet else torch.optim.Adam(model.parameters(), lr=0.001)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6) if resnet else None
+    total_steps = len(train_data_loader) * epochs
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=1e-6) if resnet else None
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     best_vloss = 1_000_000
@@ -180,7 +184,7 @@ def train(train_file, valid_file, epochs=25, batch_size=64, prog_check=10000, ex
         epoch_time_start = time.time()
         model.train(True)
         train_time_start = time.time()
-        avg_loss = train_one_epoch(model, train_data_loader, optimizer, loss_fn, epoch, device, prog_check, extended)
+        avg_loss = train_one_epoch(model, train_data_loader, optimizer, loss_fn, epoch, device, prog_check, extended, scheduler)
         train_secs = time.time() - train_time_start
 
         running_vloss = 0.0
@@ -255,9 +259,6 @@ def train(train_file, valid_file, epochs=25, batch_size=64, prog_check=10000, ex
             print(f'\tTime: train {train_secs:.1f}s, valid {valid_secs:.1f}s, epoch {time.time()-epoch_time_start:.1f}s')
             print('-'*20)
 
-        if scheduler is not None:
-            scheduler.step()
-
         if avg_vloss < best_vloss:
             best_vloss = avg_vloss
             model_path = f"model_{timestamp}{'_extended_' if extended else '_'}{epoch}.model"
@@ -289,7 +290,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--train", type=str, default="../data/parsed/train.pgn")
     parser.add_argument("--valid", type=str, default="../data/parsed/valid.pgn")
-    parser.add_argument("--epochs", type=int, default=25)
+    parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--prog_check", type=int, default=10000)
     parser.add_argument("--extended", action="store_true")

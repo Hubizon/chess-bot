@@ -124,9 +124,6 @@ def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, device,
     return last_loss
 
 def train(train_file, valid_file, epochs=10, batch_size=64, prog_check=10000, extended=False, resnet=False, max_games=None):
-    if resnet:
-        extended = True
-
     if torch.cuda.is_available():
         device = torch.device("cuda")
         print(f"Using device: cuda ({torch.cuda.get_device_name(0)})")
@@ -135,7 +132,7 @@ def train(train_file, valid_file, epochs=10, batch_size=64, prog_check=10000, ex
         print("Using device: cpu")
 
     if resnet:
-        model = ChessResNet()
+        model = ChessResNet(extended=extended)
     elif extended:
         model = ExtendedChessCNN()
     else:

@@ -117,10 +117,11 @@ class ResidualBlock(nn.Module):
         return x
 
 class ChessResNet(nn.Module):
-    def __init__(self, num_blocks: int = 10, filters: int = 256):
+    def __init__(self, num_blocks: int = 10, filters: int = 256, extended: bool = True):
         super().__init__()
         self.num_blocks = num_blocks
         self.filters = filters
+        self.extended = extended
         
         self.conv_in = nn.Conv2d(12, filters, kernel_size=3, padding=1, bias=False)
         self.bn_in = nn.BatchNorm2d(filters)
@@ -131,7 +132,9 @@ class ChessResNet(nn.Module):
         
         self.policy_conv = nn.Conv2d(filters, 64, kernel_size=1, padding=0, bias=False)
         self.policy_bn = nn.BatchNorm2d(64)
-        self.policy_fc = nn.Linear(in_features=64*8*8, out_features=64**2+5)
+
+        final_features = 64**2 + 5 if extended else 64 * 2
+        self.policy_fc = nn.Linear(in_features=64*8*8, out_features=final_features)
 
     def forward(self, x):
         x = self.conv_in(x)
@@ -147,10 +150,14 @@ class ChessResNet(nn.Module):
         p = p.view(p.size(0), -1)
         output = self.policy_fc(p)
         
-        move = output[:, :64**2]
-        promotion = output[:, 64**2:]
-        
-        return move, promotion
+        if self.extended:
+            move = output[:, :64**2]
+            promotion = output[:, 64**2:]
+            return move, promotion
+        else:
+            from_features = output[:, :64]
+            to_features = output[:, 64:]
+            return from_features, to_features
 
 
 # Dataset requires __init__, __len__ and __getitem__    

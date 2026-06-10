@@ -13,7 +13,6 @@ from_squares, to_squares = model(test_input)
 print("Non-extended output shapes:", from_squares.shape, to_squares.shape)
 
 model = ExtendedChessCNN()
-square, prom = model(test_input)
+move, prom = model(test_input)
 
-print("Extended output shapes:", square.shape, prom.shape)
-print("Extracted moves: {}")
+print("Extended output shapes:", move.shape, prom.shape, prom[0][1:].shape)

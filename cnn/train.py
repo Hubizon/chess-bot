@@ -156,7 +156,6 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64, extende
                 if extended:
                     vinputs, v_move, v_prom = vdata
                     vprediction_move, vprediction_prom = model(vinputs)
-                    vprediction_prom_piece = torch.argmax(vprediction_prom[0:])+1
                     vloss_move = loss_fn(vprediction_move, v_move)
                     vloss_prom = loss_fn(vprediction_prom, v_prom)
                     running_vloss += (vloss_move + vloss_prom)
@@ -170,10 +169,12 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64, extende
                 for id in range(batchsize):
                     all_guesses += 1
                     if extended:
-                        curr_pred_from = int(vprediction_move[id]//64)
-                        curr_pred_to = int(vprediction_move[id]%64)
+                        curr_pred_move = int(torch.argmax(vprediction_move[id]))
+                        curr_pred_from = curr_pred_move//64
+                        curr_pred_to = curr_pred_move%64
                         curr_actual_from = int(v_move[id]//64)
                         curr_actual_to = int(v_move[id]%64)
+                        vprediction_prom_piece = int(torch.argmax(vprediction_prom[id][1:]))+1
                     else:
                         curr_pred_from = int(torch.argmax(vprediction_from[id]))
                         curr_pred_to = int(torch.argmax(vprediction_to[id]))
@@ -192,7 +193,11 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64, extende
                     if(curr_actual_from == curr_pred_from and curr_actual_to == curr_pred_to):
                         correct_guesses += 1
                         piece_correct_guesses[piece_type] += 1
-                        if extended and v_prom[0] == 0.0 and v_prom[vprediction_prom_piece] == 0.0:
+                        if extended and v_prom[id][0] == 0.0 and v_prom[id][vprediction_prom_piece] == 0.0:
+                            # print("Incorrect promotion guess.")
+                            # print(f"Valid promotion table: {v_prom[id]}")
+                            # print(f"Vprediction: {vprediction_prom}")
+                            # print(f"Predicted piece (if any): {vprediction_prom_piece}")
                             piece_correct_guesses[piece_type] -= 1
 
             avg_vloss = running_vloss / (i+1)

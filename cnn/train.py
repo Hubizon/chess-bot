@@ -1,11 +1,12 @@
 import torch
-from cnn import ChessCNN, ChessDataset, ExtendedChessCNN, ExtendedChessDataset, extract_move
+from cnn import ChessCNN, ChessDataset, ExtendedChessCNN, ChessResNet, ExtendedChessDataset, extract_move
 from datetime import datetime
 from torch.utils.data import DataLoader
 import chess
 import chess.pgn
 import numpy as np
 import argparse
+import time
 
 # Transforms a board state into a datapoint.
 def board_to_datapoint(board):
@@ -20,16 +21,23 @@ def board_to_datapoint(board):
 
     return datapoint
 
-def file_to_data(filename, extended):
+def file_to_data(filename, extended, max_games=None, progress_check=5000):
+    time_start = time.time()
     pgn_file = open(filename)
     X_data = []
     y_data = []
     prom_data = []
+    games_read = 0
 
     while True:
         game = chess.pgn.read_game(pgn_file)
         if game is None:
             break
+        games_read += 1
+        if max_games is not None and games_read > max_games:
+            break
+        if games_read % progress_check == 0:
+            print(f"  {filename}: {games_read:,} games, {len(X_data):,} positions")
 
         result = game.headers.get("Result")
 
@@ -51,7 +59,7 @@ def file_to_data(filename, extended):
                 X_data.append(board_to_datapoint(board_perspective))
                 if extended:
                     y_data.append(from_square*64+to_square)
-                    prom_node = torch.zeros(5)
+                    prom_node = np.zeros(5, dtype=np.float32)
                     if move.promotion is not None:
                         prom_node[move.promotion-1] = 1.0
                     else:
@@ -63,22 +71,28 @@ def file_to_data(filename, extended):
 
     X_data = np.array(X_data)
     y_data = np.array(y_data)
-    print(f"Input from {filename} completed.")
+    print(f"Input from {filename} completed: {len(X_data):,} positions in {time.time()-time_start:.1f}s.")
     if extended:
         prom_data = np.array(prom_data)
         return X_data, y_data, prom_data
     else:
         return X_data, y_data
 
-def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, progcheck=64, extended=False):
+def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, device, prog_check=10000, extended=False):
     running_loss = 0.
     last_loss = 0.
 
     for i, data in enumerate(data_loader):
         if extended:
             boards, target_move, target_prom = data
+            boards = boards.to(device)
+            target_move = target_move.to(device)
+            target_prom = target_prom.to(device)
         else:
             boards, target_from, target_to = data
+            boards = boards.to(device)
+            target_from = target_from.to(device)
+            target_to = target_to.to(device)
 
         optimizer.zero_grad()
 
@@ -99,36 +113,54 @@ def train_one_epoch(model, data_loader, optimizer, loss_fn, epoch_index, progche
         optimizer.step()
 
         running_loss += loss.item()
-        if i % progcheck == progcheck-1:
-            last_loss = running_loss / progcheck
-            # print(f'Batch {i // progcheck + 1} loss: {last_loss}')
+        if i % prog_check == prog_check-1:
+            last_loss = running_loss / prog_check
+            print(f"  batch {i+1:,} (epoch {epoch_index}) train loss: {last_loss:.6f}")
             running_loss = 0.
 
     print(f"Epoch {epoch_index} completed.")
     return last_loss
 
-def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64, extended=False):
+def train(train_file, valid_file, epochs=25, batch_size=64, prog_check=10000, extended=False, resnet=False, max_games=None):
+    if resnet:
+        extended = True
 
-    if extended:
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        print(f"Using device: cuda ({torch.cuda.get_device_name(0)})")
+    else:
+        device = torch.device("cpu")
+        print("Using device: cpu")
+
+    if resnet:
+        model = ChessResNet()
+    elif extended:
         model = ExtendedChessCNN()
     else:
         model = ChessCNN()
+    model = model.to(device)
     loss_fn = torch.nn.CrossEntropyLoss()
 
+    data_time_start = time.time()
     if extended:
-        train_X, train_y, train_prom = file_to_data(train_file, extended=True)
-        valid_X, valid_y, valid_prom = file_to_data(valid_file, extended=True)
+        train_X, train_y, train_prom = file_to_data(train_file, extended=True, max_games=max_games)
+        valid_X, valid_y, valid_prom = file_to_data(valid_file, extended=True, max_games=max_games)
         train_dataset = ExtendedChessDataset(train_X, train_y, train_prom)
         valid_dataset = ExtendedChessDataset(valid_X, valid_y, valid_prom)
+        del train_X, train_y, train_prom, valid_X, valid_y, valid_prom
     else:
-        train_X, train_y = file_to_data(train_file, extended=False)
-        valid_X, valid_y = file_to_data(valid_file, extended=False)
+        train_X, train_y = file_to_data(train_file, extended=False, max_games=max_games)
+        valid_X, valid_y = file_to_data(valid_file, extended=False, max_games=max_games)
         train_dataset = ChessDataset(train_X, train_y)
         valid_dataset = ChessDataset(valid_X, valid_y)
-    train_data_loader = DataLoader(train_dataset, batch_size=batchsize, shuffle=True, drop_last=True)
-    valid_data_loader = DataLoader(valid_dataset, batch_size=batchsize, shuffle=True, drop_last=True)
+        del train_X, train_y, valid_X, valid_y
+    print(f"Total data loading: {time.time()-data_time_start:.1f}s.")
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    train_data_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, drop_last=True, pin_memory=True, num_workers=4)
+    valid_data_loader = DataLoader(valid_dataset, batch_size=batch_size, pin_memory=True, num_workers=2)
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001) if resnet else torch.optim.Adam(model.parameters(), lr=0.001)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1e-6) if resnet else None
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     best_vloss = 1_000_000
@@ -145,28 +177,38 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64, extende
         piece_all_guesses = {1:0, 2:0, 3:0, 4:0, 5:0, 6:0}
 
         print(f"Starting epoch: {epoch}")
+        epoch_time_start = time.time()
         model.train(True)
-        avg_loss = train_one_epoch(model, train_data_loader, optimizer, loss_fn, epoch, progcheck, extended)
+        train_time_start = time.time()
+        avg_loss = train_one_epoch(model, train_data_loader, optimizer, loss_fn, epoch, device, prog_check, extended)
+        train_secs = time.time() - train_time_start
 
         running_vloss = 0.0
         model.eval()
 
+        valid_time_start = time.time()
         with torch.no_grad():
             for i, vdata in enumerate(valid_data_loader):
                 if extended:
                     vinputs, v_move, v_prom = vdata
+                    vinputs = vinputs.to(device)
+                    v_move = v_move.to(device)
+                    v_prom = v_prom.to(device)
                     vprediction_move, vprediction_prom = model(vinputs)
                     vloss_move = loss_fn(vprediction_move, v_move)
                     vloss_prom = loss_fn(vprediction_prom, v_prom)
-                    running_vloss += (vloss_move + vloss_prom)
+                    running_vloss += (vloss_move + vloss_prom).item()
                 else:
                     vinputs, v_from, v_to = vdata
+                    vinputs = vinputs.to(device)
+                    v_from = v_from.to(device)
+                    v_to = v_to.to(device)
                     vprediction_from, vprediction_to = model(vinputs)
                     vloss_from = loss_fn(vprediction_from, v_from)
                     vloss_to = loss_fn(vprediction_to, v_to)
-                    running_vloss += (vloss_from + vloss_to)
+                    running_vloss += (vloss_from + vloss_to).item()
 
-                for id in range(batchsize):
+                for id in range(vinputs.size(0)):
                     all_guesses += 1
                     if extended:
                         curr_pred_move = int(torch.argmax(vprediction_move[id]))
@@ -209,21 +251,26 @@ def train(train_file, valid_file, epochs=25, batchsize=64, progcheck=64, extende
             print(f'\tPiece type matched: {correct_piece_match}/{all_guesses} {100*correct_piece_match/all_guesses:.3f}%')
             for pc in range(1,7):
                 print(f'\t{chess.piece_name(pc)} move accuracy: {piece_correct_guesses[pc]}/{piece_all_guesses[pc]} {100*piece_correct_guesses[pc]/piece_all_guesses[pc]:.3f}%')
+            valid_secs = time.time() - valid_time_start
+            print(f'\tTime: train {train_secs:.1f}s, valid {valid_secs:.1f}s, epoch {time.time()-epoch_time_start:.1f}s')
             print('-'*20)
+
+        if scheduler is not None:
+            scheduler.step()
 
         if avg_vloss < best_vloss:
             best_vloss = avg_vloss
-            model_path = f'model_{timestamp}{'_extended_' if extended else '_'}{epoch}.model'
-            save_training_checkpoint(epoch, model, optimizer, batchsize, progcheck, extended)
+            model_path = f"model_{timestamp}{'_extended_' if extended else '_'}{epoch}.model"
+            save_training_checkpoint(epoch, model, optimizer, batch_size, prog_check, extended)
             torch.save(model.state_dict(), model_path)
 
-def save_training_checkpoint(epoch, model, optimizer, batchsize, progcheck, extended):
+def save_training_checkpoint(epoch, model, optimizer, batch_size, prog_check, extended):
     checkpoint_data = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
-        'batch_size': batchsize,
-        'progress_check': progcheck,
+        'batch_size': batch_size,
+        'progress_check': prog_check,
         'extended': extended
     }
     if extended:
@@ -231,8 +278,9 @@ def save_training_checkpoint(epoch, model, optimizer, batchsize, progcheck, exte
     else:
         torch.save(checkpoint_data, "training_checkpoint_epoch"+str(epoch)+".tar")
 
-def load_training_checkpoint(epoch, model, optimizer):
-    checkpoint_data = torch.load("chess_checkpoint_epoch"+str(epoch)+".tar")
+def load_training_checkpoint(epoch, model, optimizer, extended=False):
+    prefix = "extended_training_checkpoint_epoch" if extended else "training_checkpoint_epoch"
+    checkpoint_data = torch.load(prefix+str(epoch)+".tar")
     model.load_state_dict(checkpoint_data['model_state_dict'])
     optimizer.load_state_dict(checkpoint_data['optimizer_state_dict'])
     return checkpoint_data['epoch'], checkpoint_data['batch_size'], checkpoint_data['progress_check'], checkpoint_data['extended']
@@ -242,10 +290,14 @@ if __name__ == "__main__":
     parser.add_argument("--train", type=str, default="../data/parsed/train.pgn")
     parser.add_argument("--valid", type=str, default="../data/parsed/valid.pgn")
     parser.add_argument("--epochs", type=int, default=25)
-    parser.add_argument("--batchsize", type=int, default=64)
-    parser.add_argument("--progcheck", type=int, default=64)
-    parser.add_argument("--extended", type=bool, default=False)
+    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--prog_check", type=int, default=10000)
+    parser.add_argument("--extended", action="store_true")
+    parser.add_argument("--resnet", action="store_true")
+    parser.add_argument("--max_games", type=int, default=None)
     args = parser.parse_args()
     if args.extended:
         print("Extended model chosen.")
-    train(args.train, args.valid, args.epochs, args.batchsize, args.progcheck, args.extended)
+    if args.resnet:
+        print("ResNet model chosen.")
+    train(args.train, args.valid, args.epochs, args.batch_size, args.prog_check, args.extended, args.resnet, args.max_games)

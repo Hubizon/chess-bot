@@ -1,9 +1,14 @@
 .venv/
 .idea/
 .vscode/
+*checkpoint*/
+*logs*/
 
 *.pyc
 *.npy
+*.out
+*.sbatch
+*.so
 
 training_checkpoint_epoch*
 cnn/train_games*

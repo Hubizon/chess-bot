@@ -57,7 +57,7 @@ def get_best_move(model, board, extended):
 
     if best_move.promotion is not None:
         if extended:
-            best_move.promotion = torch.argmax(prediction_prom[1:])+1 # Chooses the best promotion piece
+            best_move.promotion = torch.argmax(prediction_prom[1:])+2 # Chooses the best promotion piece
         else:
             best_move.promotion = chess.QUEEN # No underpromotion is recognized in this model
 

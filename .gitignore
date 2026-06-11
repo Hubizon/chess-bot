@@ -10,14 +10,16 @@
 *.sbatch
 *.so
 
-training_checkpoint_epoch*
+*training_checkpoint_epoch*
 cnn/train_games*
 cnn/valid_games*
 cnn/filtered_games*
-model_*.model
+*model_*.model
 
 */dist
 */build
 run_adapter
+run_adapter_resnet
+run_adapter_resnet_extended
 *.spec
 *.pgn

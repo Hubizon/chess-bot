@@ -69,7 +69,7 @@ def run_bot(model_path, extended, resnet):
     board = chess.Board()
 
     if resnet:
-        model = ChessResNet()
+        model = ChessResNet(extended=extended)
     elif extended:
         model = ExtendedChessCNN()
     else:

@@ -73,8 +73,10 @@ class TicTacToeGUI:
             print(f"value: {float(value[0]):.4f}")
             self._make_move(int(action), not self.player_x)
         else:
-            policy_output = run_mcts(mcts_rng, self.params, self.batch_stats, batched_state, self.network, self.env.step, 
-                                    num_simulations=self.num_simulations, temperature=0.0, dirichlet_fraction=0.0)
+            policy_output = run_mcts(
+                mcts_rng, self.params, self.batch_stats, batched_state, self.network, self.env.step,
+                num_simulations=self.num_simulations,
+            )
             weights_str = "[" + ", ".join(f"{float(x):.4f}" for x in policy_output.action_weights[0]) + "]"
             print(f"action weights: {weights_str}")
             self._make_move(int(policy_output.action[0]), not self.player_x)

@@ -6,9 +6,9 @@ import pgx
 from jax import numpy as jnp
 from tqdm import tqdm
 
-from densenet import DenseNet
-from mcts import run_mcts
-from train import train_step
+from .densenet import DenseNet
+from .mcts import run_mcts
+from .train import train_step
 
 
 def assign_rewards_slow(game_history, player_0_reward):
@@ -55,7 +55,9 @@ def train_slow(max_iters=1, self_plays_per_generation=4, batch_size=2):
             while not state.terminated:
                 rng, mcts_rng = jax.random.split(rng, 2) # generate a new rng for MCTS to use in this turn
                 batched_state = jax.tree_util.tree_map(lambda x: jnp.expand_dims(x, 0), state) # add a batch dimension to the state
-                policy_output = run_mcts(mcts_rng, params, batched_state, network, env.step) # run MCTS to get the policy output
+                policy_output = run_mcts(
+                    mcts_rng, params, batch_stats, batched_state, network, env.step, num_simulations=16
+                ) # run MCTS to get the policy output
                 game_history.append((state, policy_output.action_weights[0])) # store the state and its corresponding MCTS policy
                 action = policy_output.action[0] # shape: [B] -> scalar
                 state = env.step(state, action)# take the action in the environment to get the next state
@@ -80,7 +82,9 @@ def train_slow(max_iters=1, self_plays_per_generation=4, batch_size=2):
                 'actual_rewards': jnp.array([b[2] for b in batch])
             }
             
-            params, batch_stats, opt_state, loss = train_step(network, optimizer, params, batch_stats, opt_state, batch_data)
+            params, batch_stats, opt_state, loss, _, _ = train_step(
+                network, optimizer, params, batch_stats, opt_state, batch_data
+            )
             total_loss += loss
             
         print(f"Generation {generation}, Loss: {total_loss / len(batches)}")
